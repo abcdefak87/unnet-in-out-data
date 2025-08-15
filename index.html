@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Scan Barang Masuk/Keluar</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<h2>📦 Scan Barang</h2>
+
+<div class="mode-select">
+    <label><input type="radio" name="mode" value="masuk" checked> Barang Masuk</label>
+    <label><input type="radio" name="mode" value="keluar"> Barang Keluar</label>
+</div>
+
+<div>
+    <input type="text" id="nama" placeholder="Scan atau ketik nama barang" autofocus>
+    <input type="number" id="jumlah" value="1" min="1">
+    <input type="text" id="petugas" placeholder="Nama Petugas">
+    <input type="text" id="catatan" placeholder="Catatan">
+    <button id="btnManual">Kirim Manual</button>
+</div>
+
+<hr>
+
+<h3>📷 Scan via Kamera HP</h3>
+<div id="reader"></div>
+
+<div id="msg" style="margin-top:10px;">🔍 Arahkan kamera ke kode...</div>
+
+<audio id="beep-sound" src="https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg"></audio>
+
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script src="script.js"></script>
+
+</body>
+</html>

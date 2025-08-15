@@ -1,0 +1,8 @@
+body { font-family: Arial, sans-serif; text-align: center; background: #c2b7b7; transition: background 0.3s; }
+#reader { width: 300px; margin: 10px auto; }
+.ok { color: green; font-weight: bold; }
+.err { color: red; font-weight: bold; }
+.mode-select { margin: 15px 0; }
+input, button { padding: 6px; margin: 4px; }
+.highlight { background: #c8ffc8; transition: background 0.5s ease; }
+.error-flash { background: #ffc8c8; transition: background 0.5s ease; }
