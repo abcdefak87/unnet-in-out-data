@@ -6,36 +6,132 @@ let isSending = false;
 let lastScan = "";
 let lastScanTime = 0;
 
+// Queue and state additions
+let sendingNow = { masuk: new Set(), keluar: new Set() };
+let sendQueue = [];
+let isProcessingQueue = false;
+let pendingQueue = [];
+let logEntries = [];
+let html5QrCode = null;
+let cameras = [];
+let currentCameraId = null;
+let isScannerRunning = false;
+
 function playBeep() { document.getElementById("beep-sound").play(); }
 function flashSuccess() { document.body.classList.add("highlight"); setTimeout(() => document.body.classList.remove("highlight"), 500); }
 function flashError() { document.body.classList.add("error-flash"); setTimeout(() => document.body.classList.remove("error-flash"), 500); }
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
 
 function kirimData(nama, jumlah, petugas, catatan, mode, isQR=false, isPCScanner=false) {
-    if (isSending) return;
-    isSending = true;
-    document.getElementById("msg").innerHTML = `📤 Mengirim: ${nama}...`;
+    const cleanNama = (nama || "").trim();
+    if (!cleanNama) return;
+    if (sendingNow[mode].has(cleanNama)) {
+        flashError();
+        document.getElementById("msg").innerHTML = `<span class="err">⚠️ ${escapeHtml(cleanNama)} sedang dalam antrian (${mode})</span>`;
+        return;
+    }
+    sendingNow[mode].add(cleanNama);
+    const jumlahNum = Math.max(1, parseInt(jumlah, 10) || 1);
+    enqueueSend({ nama: cleanNama, jumlah: jumlahNum, petugas: (petugas || "").trim(), catatan: (catatan || "").trim(), mode, isQR, isPCScanner, ts: Date.now() });
+}
 
+// Helpers: queue + offline persistence + logs
+function updatePendingCount() {
+    const el = document.getElementById("pendingCount");
+    if (el) el.textContent = String(pendingQueue.length);
+}
+function loadPendingQueue() { try { return JSON.parse(localStorage.getItem("pendingQueue") || "[]"); } catch(e) { return []; } }
+function savePendingQueue() { localStorage.setItem("pendingQueue", JSON.stringify(pendingQueue)); }
+function loadLog() { try { return JSON.parse(localStorage.getItem("scanLog") || "[]"); } catch(e) { return []; } }
+function saveLog() { localStorage.setItem("scanLog", JSON.stringify(logEntries.slice(-100))); }
+function computeCounts() {
+    let masuk = 0, keluar = 0;
+    for (const e of logEntries) {
+        if (e && e.success) {
+            if (e.mode === "masuk") masuk++;
+            else if (e.mode === "keluar") keluar++;
+        }
+    }
+    return { masuk, keluar };
+}
+function refreshLogUI() {
+    const ul = document.getElementById("logList");
+    if (!ul) return;
+    ul.innerHTML = "";
+    const last = logEntries.slice(-50).reverse();
+    for (const item of last) {
+        const li = document.createElement("li");
+        li.className = item.success ? "ok" : "err";
+        const timeStr = new Date(item.ts).toLocaleTimeString();
+        li.textContent = `[${timeStr}] ${(item.mode || "-").toUpperCase()} ${item.nama} x${item.jumlah}${item.success ? " ✓" : " ✗"}`;
+        ul.appendChild(li);
+    }
+    const c = computeCounts();
+    const masukEl = document.getElementById("countMasuk");
+    const keluarEl = document.getElementById("countKeluar");
+    if (masukEl) masukEl.textContent = String(c.masuk);
+    if (keluarEl) keluarEl.textContent = String(c.keluar);
+}
+function addLogEntry(entry) { logEntries.push(entry); saveLog(); refreshLogUI(); }
+
+function enqueueSend(payload) { sendQueue.push(payload); processQueue(); }
+function processQueue() {
+    if (isProcessingQueue || sendQueue.length === 0) return;
+    isProcessingQueue = true;
+    const item = sendQueue.shift();
+    document.getElementById("msg").innerHTML = `📤 Mengirim: ${escapeHtml(item.nama)}...`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
     fetch(scriptURL, {
         method: "POST",
-        body: new URLSearchParams({ nama, jumlah, petugas, catatan, mode })
+        body: new URLSearchParams({ nama: item.nama, jumlah: item.jumlah, petugas: item.petugas, catatan: item.catatan, mode: item.mode }),
+        signal: controller.signal
     })
-    .then(res => res.json())
-    .then(data => {
-        if (data.status === "OK") {
-            playBeep();
+    .then(async res => {
+        clearTimeout(timeoutId);
+        let data = null;
+        try { data = await res.json(); } catch(e) { data = null; }
+        const ok = res.ok && data && data.status === "OK";
+        if (ok) {
+            if (document.getElementById("beepToggle")?.checked) playBeep();
+            if (document.getElementById("vibrateToggle")?.checked && navigator.vibrate) navigator.vibrate(100);
             flashSuccess();
-            document.getElementById("msg").innerHTML = `<span class="ok">✅ ${nama} (${mode}) berhasil</span>`;
-            if (isQR) scannedQR[mode].add(nama);
-            if (isPCScanner) scannedPC[mode].add(nama);
-            let otherMode = mode === "masuk" ? "keluar" : "masuk";
-            if (isQR) scannedQR[otherMode].delete(nama);
-            if (isPCScanner) scannedPC[otherMode].delete(nama);
+            document.getElementById("msg").innerHTML = `<span class="ok">✅ ${escapeHtml(item.nama)} (${item.mode}) berhasil</span>`;
+            if (item.isQR) scannedQR[item.mode].add(item.nama);
+            if (item.isPCScanner) scannedPC[item.mode].add(item.nama);
+            const otherMode = item.mode === "masuk" ? "keluar" : "masuk";
+            if (item.isQR) scannedQR[otherMode].delete(item.nama);
+            if (item.isPCScanner) scannedPC[otherMode].delete(item.nama);
+            addLogEntry({ ts: item.ts || Date.now(), mode: item.mode, nama: item.nama, jumlah: item.jumlah, success: true });
         } else {
-            document.getElementById("msg").innerHTML = `<span class="err">❌ Gagal</span>`;
+            flashError();
+            document.getElementById("msg").innerHTML = `<span class="err">❌ Gagal${data && data.message ? ": " + escapeHtml(data.message) : ""}</span>`;
+            pendingQueue.push(item); savePendingQueue(); updatePendingCount();
+            addLogEntry({ ts: item.ts || Date.now(), mode: item.mode, nama: item.nama, jumlah: item.jumlah, success: false });
         }
     })
-    .catch(err => { document.getElementById("msg").innerHTML = `<span class="err">⚠️ Error: ${err}</span>`; })
-    .finally(() => { isSending = false; });
+    .catch(err => {
+        clearTimeout(timeoutId);
+        flashError();
+        const emsg = err && err.message ? err.message : String(err);
+        document.getElementById("msg").innerHTML = `<span class="err">⚠️ Jaringan error: ${escapeHtml(emsg)}</span>`;
+        pendingQueue.push(item); savePendingQueue(); updatePendingCount();
+        addLogEntry({ ts: item.ts || Date.now(), mode: item.mode, nama: item.nama, jumlah: item.jumlah, success: false });
+    })
+    .finally(() => {
+        sendingNow[item.mode].delete(item.nama);
+        isProcessingQueue = false;
+        processQueue();
+    });
+}
+function retryPendingQueue() {
+    if (pendingQueue.length === 0) return;
+    const toRetry = pendingQueue.splice(0, pendingQueue.length);
+    savePendingQueue(); updatePendingCount();
+    for (const p of toRetry) {
+        if (!sendingNow[p.mode]?.has(p.nama)) sendingNow[p.mode].add(p.nama);
+        enqueueSend(p);
+    }
 }
 
 // Scanner fisik / input manual
@@ -61,9 +157,9 @@ document.getElementById("nama").addEventListener("keypress", function(e) {
         let avgInterval = intervals.length ? intervals.reduce((a,b)=>a+b,0)/intervals.length : 0;
 
         if (avgInterval < SCANNER_THRESHOLD) {
-            if (scannedPC[mode].has(nama)) {
+            if (scannedPC[mode].has(nama) || sendingNow[mode].has(nama)) {
                 flashError();
-                document.getElementById("msg").innerHTML = `<span class="err">⚠️ ${nama} sudah discan (${mode})</span>`;
+                document.getElementById("msg").innerHTML = `<span class="err">⚠️ ${escapeHtml(nama)} sudah discan/menunggu (${mode})</span>`;
             } else {
                 kirimData(nama, document.getElementById("jumlah").value,
                           document.getElementById("petugas").value.trim(),
@@ -98,32 +194,108 @@ document.getElementById("btnManual").addEventListener("click", function() {
 function onScanSuccess(decodedText) {
     const now = Date.now();
     const mode = document.querySelector('input[name="mode"]:checked').value;
+    const text = (decodedText || "").trim();
 
-    if (decodedText === lastScan && (now - lastScanTime) < 2000) return;
-    lastScan = decodedText;
+    if (text === lastScan && (now - lastScanTime) < 2000) return;
+    lastScan = text;
     lastScanTime = now;
 
-    if (scannedQR[mode].has(decodedText)) {
+    if (!text) return;
+
+    if (scannedQR[mode].has(text) || sendingNow[mode].has(text)) {
         flashError();
-        document.getElementById("msg").innerHTML = `<span class="err">⚠️ QR ${decodedText} sudah discan (${mode})</span>`;
+        document.getElementById("msg").innerHTML = `<span class="err">⚠️ QR ${escapeHtml(text)} sudah discan/menunggu (${mode})</span>`;
         return;
     }
 
-    kirimData(decodedText, document.getElementById("jumlah").value,
+    kirimData(text, document.getElementById("jumlah").value,
               document.getElementById("petugas").value.trim(),
               document.getElementById("catatan").value.trim(),
               mode, true, false);
 }
 
-const html5QrCode = new Html5Qrcode("reader");
-Html5Qrcode.getCameras().then(cameras => {
-    if (cameras && cameras.length) {
-        let backCamera = cameras.find(cam => cam.label.toLowerCase().includes('back') || cam.label.toLowerCase().includes('rear') || cam.label.toLowerCase().includes('environment'));
-        let cameraId = backCamera ? backCamera.id : cameras[cameras.length - 1].id;
-        html5QrCode.start(cameraId, { fps: 10, qrbox: 200 }, onScanSuccess);
-    } else {
-        document.getElementById("msg").innerHTML = `<span class="err">⚠️ Kamera tidak ditemukan, gunakan input manual</span>`;
+async function startScanner(cameraId) {
+    if (!html5QrCode) html5QrCode = new Html5Qrcode("reader");
+    if (isScannerRunning) await stopScanner();
+    if (!cameraId) return;
+    try {
+        await html5QrCode.start(cameraId, { fps: 10, qrbox: 200 }, onScanSuccess);
+        isScannerRunning = true;
+        currentCameraId = cameraId;
+        const btn = document.getElementById("toggleScanner");
+        if (btn) btn.textContent = "Stop Kamera";
+        document.getElementById("msg").textContent = "🔍 Arahkan kamera ke kode...";
+    } catch (e) {
+        isScannerRunning = false;
+        document.getElementById("msg").innerHTML = `<span class=\"err\">⚠️ Kamera gagal dibuka</span>`;
     }
-}).catch(err => {
-    document.getElementById("msg").innerHTML = `<span class="err">⚠️ Kamera gagal dibuka, gunakan input manual</span>`;
-});
+}
+async function stopScanner() {
+    if (html5QrCode && isScannerRunning) {
+        try { await html5QrCode.stop(); await html5QrCode.clear(); } catch(e) {}
+        isScannerRunning = false;
+    }
+}
+async function switchCamera(newId) { await startScanner(newId); }
+function initCamera() {
+    html5QrCode = new Html5Qrcode("reader");
+    Html5Qrcode.getCameras().then(cams => {
+        cameras = cams || [];
+        const select = document.getElementById("cameraSelect");
+        if (select && cameras.length) {
+            select.innerHTML = "";
+            cameras.forEach(cam => {
+                const opt = document.createElement("option");
+                opt.value = cam.id; opt.textContent = cam.label || cam.id; select.appendChild(opt);
+            });
+            let back = cameras.find(cam => (cam.label || "").toLowerCase().includes("back") || (cam.label || "").toLowerCase().includes("rear") || (cam.label || "").toLowerCase().includes("environment"));
+            currentCameraId = back ? back.id : cameras[cameras.length - 1].id;
+            select.value = currentCameraId;
+            startScanner(currentCameraId);
+            select.addEventListener("change", () => { const id = select.value; switchCamera(id); });
+        } else {
+            document.getElementById("msg").innerHTML = `<span class="err">⚠️ Kamera tidak ditemukan, gunakan input manual</span>`;
+        }
+    }).catch(err => {
+        document.getElementById("msg").innerHTML = `<span class="err">⚠️ Kamera gagal dibuka, gunakan input manual</span>`;
+    });
+
+    const toggleBtn = document.getElementById("toggleScanner");
+    if (toggleBtn) {
+        toggleBtn.addEventListener("click", async () => {
+            if (isScannerRunning) { await stopScanner(); toggleBtn.textContent = "Mulai Kamera"; }
+            else { await startScanner(currentCameraId || cameras?.[0]?.id); toggleBtn.textContent = "Stop Kamera"; }
+        });
+    }
+}
+
+function setupApp() {
+    // Persist petugas & jumlah
+    const petugasInput = document.getElementById("petugas");
+    const jumlahInput = document.getElementById("jumlah");
+    const savedPetugas = localStorage.getItem("petugas"); if (savedPetugas) petugasInput.value = savedPetugas;
+    const savedJumlah = localStorage.getItem("jumlah"); if (savedJumlah) jumlahInput.value = savedJumlah;
+    petugasInput.addEventListener("change", () => localStorage.setItem("petugas", petugasInput.value.trim()));
+    jumlahInput.addEventListener("change", () => localStorage.setItem("jumlah", jumlahInput.value));
+
+    // +/- jumlah
+    const inc = document.getElementById("incJumlah");
+    const dec = document.getElementById("decJumlah");
+    if (inc) inc.addEventListener("click", () => { const v = parseInt(jumlahInput.value || "1", 10) || 1; jumlahInput.value = v + 1; jumlahInput.dispatchEvent(new Event("change")); });
+    if (dec) dec.addEventListener("click", () => { const v = parseInt(jumlahInput.value || "1", 10) || 1; jumlahInput.value = Math.max(1, v - 1); jumlahInput.dispatchEvent(new Event("change")); });
+
+    // Pending queue & log
+    pendingQueue = loadPendingQueue(); updatePendingCount();
+    logEntries = loadLog(); refreshLogUI();
+
+    const retryBtn = document.getElementById("retryPending"); if (retryBtn) retryBtn.addEventListener("click", retryPendingQueue);
+    const clearLogBtn = document.getElementById("clearLog"); if (clearLogBtn) clearLogBtn.addEventListener("click", () => { logEntries = []; saveLog(); refreshLogUI(); });
+
+    // Camera
+    initCamera();
+}
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", setupApp);
+} else {
+    setupApp();
+}

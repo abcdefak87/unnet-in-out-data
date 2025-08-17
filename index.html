@@ -17,9 +17,20 @@
 <div>
     <input type="text" id="nama" placeholder="Scan atau ketik nama barang" autofocus>
     <input type="number" id="jumlah" value="1" min="1">
+    <button id="decJumlah" title="Kurangi jumlah">-</button>
+    <button id="incJumlah" title="Tambah jumlah">+</button>
     <input type="text" id="petugas" placeholder="Nama Petugas">
     <input type="text" id="catatan" placeholder="Catatan">
     <button id="btnManual">Kirim Manual</button>
+</div>
+
+<div class="controls">
+    <select id="cameraSelect"></select>
+    <button id="toggleScanner">Stop Kamera</button>
+    <label><input type="checkbox" id="beepToggle" checked> Suara</label>
+    <label><input type="checkbox" id="vibrateToggle"> Getar</label>
+    <button id="retryPending" title="Kirim ulang data tertunda">Kirim Ulang (<span id="pendingCount">0</span>)</button>
+    <button id="clearLog">Hapus Log</button>
 </div>
 
 <hr>
@@ -28,6 +39,13 @@
 <div id="reader"></div>
 
 <div id="msg" style="margin-top:10px;">🔍 Arahkan kamera ke kode...</div>
+
+<h3>📊 Riwayat & Statistik</h3>
+<div id="stats">
+    <span>Masuk: <strong id="countMasuk">0</strong></span>
+    <span style="margin-left:10px;">Keluar: <strong id="countKeluar">0</strong></span>
+</div>
+<ul id="logList"></ul>
 
 <audio id="beep-sound" src="https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg"></audio>
 
