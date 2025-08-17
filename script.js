@@ -317,6 +317,10 @@ function setupApp() {
     const retryBtn = document.getElementById("retryPending"); if (retryBtn) retryBtn.addEventListener("click", retryPendingQueue);
     const clearLogBtn = document.getElementById("clearLog"); if (clearLogBtn) clearLogBtn.addEventListener("click", () => { logEntries = []; saveLog(); refreshLogUI(); });
 
+    // Network auto-retry
+    window.addEventListener("online", () => { document.getElementById("msg").textContent = "Online kembali. Mengirim ulang..."; retryPendingQueue(); });
+    window.addEventListener("offline", () => { document.getElementById("msg").textContent = "Anda offline. Data akan diantrikan."; });
+
     // Camera
     initCamera();
 }
