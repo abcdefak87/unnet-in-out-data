@@ -74,6 +74,37 @@ function refreshLogUI() {
 }
 function addLogEntry(entry) { logEntries.push(entry); saveLog(); refreshLogUI(); }
 
+// Robust sender: try POST then GET fallback
+async function sendToAppsScript(params, signal) {
+    const headers = { "Accept": "application/json, text/plain, */*", "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" };
+    const body = new URLSearchParams(params).toString();
+
+    function parseOk(res, text) {
+        try { const data = JSON.parse(text); return { ok: res.ok && data && data.status === "OK", message: data && data.message ? data.message : null }; } catch(_) {}
+        const t = (text || "").trim();
+        if (/\bstatus\b\s*:\s*"?OK"?/i.test(t) || /^OK$/i.test(t)) return { ok: true, message: null };
+        return { ok: res.ok && text === "", message: text };
+    }
+
+    // Try POST first
+    try {
+        const res = await fetch(scriptURL, { method: "POST", headers, body, redirect: "follow", signal });
+        const text = await res.text();
+        const parsed = parseOk(res, text);
+        if (parsed.ok) return { ok: true };
+        // If clearly method not allowed or not parsed, try GET fallback
+    } catch (e) {
+        // network error -> fall back to GET
+    }
+
+    // GET fallback
+    const url = scriptURL + (scriptURL.includes("?") ? "&" : "?") + body;
+    const res2 = await fetch(url, { method: "GET", headers: { "Accept": "application/json, text/plain, */*" }, redirect: "follow", signal });
+    const text2 = await res2.text();
+    const parsed2 = parseOk(res2, text2);
+    return { ok: parsed2.ok, message: parsed2.message || text2 };
+}
+
 function enqueueSend(payload) { sendQueue.push(payload); processQueue(); }
 function processQueue() {
     if (isProcessingQueue || sendQueue.length === 0) return;
@@ -81,18 +112,12 @@ function processQueue() {
     const item = sendQueue.shift();
     document.getElementById("msg").innerHTML = `📤 Mengirim: ${escapeHtml(item.nama)}...`;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
-    fetch(scriptURL, {
-        method: "POST",
-        body: new URLSearchParams({ nama: item.nama, jumlah: item.jumlah, petugas: item.petugas, catatan: item.catatan, mode: item.mode }),
-        signal: controller.signal
-    })
-    .then(async res => {
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+    sendToAppsScript({ nama: item.nama, jumlah: item.jumlah, petugas: item.petugas, catatan: item.catatan, mode: item.mode }, controller.signal)
+    .then(result => {
         clearTimeout(timeoutId);
-        let data = null;
-        try { data = await res.json(); } catch(e) { data = null; }
-        const ok = res.ok && data && data.status === "OK";
-        if (ok) {
+        if (result && result.ok) {
             if (document.getElementById("beepToggle")?.checked) playBeep();
             if (document.getElementById("vibrateToggle")?.checked && navigator.vibrate) navigator.vibrate(100);
             flashSuccess();
@@ -105,7 +130,8 @@ function processQueue() {
             addLogEntry({ ts: item.ts || Date.now(), mode: item.mode, nama: item.nama, jumlah: item.jumlah, success: true });
         } else {
             flashError();
-            document.getElementById("msg").innerHTML = `<span class="err">❌ Gagal${data && data.message ? ": " + escapeHtml(data.message) : ""}</span>`;
+            const emsg = result && result.message ? result.message : "Tidak diketahui";
+            document.getElementById("msg").innerHTML = `<span class="err">❌ Gagal${emsg ? ": " + escapeHtml(emsg) : ""}</span>`;
             pendingQueue.push(item); savePendingQueue(); updatePendingCount();
             addLogEntry({ ts: item.ts || Date.now(), mode: item.mode, nama: item.nama, jumlah: item.jumlah, success: false });
         }
@@ -114,7 +140,7 @@ function processQueue() {
         clearTimeout(timeoutId);
         flashError();
         const emsg = err && err.message ? err.message : String(err);
-        document.getElementById("msg").innerHTML = `<span class="err">⚠️ Jaringan error: ${escapeHtml(emsg)}</span>`;
+        document.getElementById("msg").innerHTML = `<span class=\"err\">⚠️ Jaringan error: ${escapeHtml(emsg)}</span>`;
         pendingQueue.push(item); savePendingQueue(); updatePendingCount();
         addLogEntry({ ts: item.ts || Date.now(), mode: item.mode, nama: item.nama, jumlah: item.jumlah, success: false });
     })
