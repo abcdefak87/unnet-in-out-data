@@ -6,3 +6,8 @@ body { font-family: Arial, sans-serif; text-align: center; background: #c2b7b7; 
 input, button { padding: 6px; margin: 4px; }
 .highlight { background: #c8ffc8; transition: background 0.5s ease; }
 .error-flash { background: #ffc8c8; transition: background 0.5s ease; }
+.controls { margin: 10px 0; }
+#cameraSelect { padding: 6px; margin: 4px; }
+#stats { margin: 10px 0; }
+#logList { list-style: none; padding: 0; max-width: 600px; margin: 10px auto; text-align: left; }
+#logList li { padding: 4px 8px; border-bottom: 1px dashed #999; }
